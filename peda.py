@@ -22,12 +22,9 @@ import traceback
 import collections
 from codecs import encode, decode
 try:
-    import pickle as pickle
+    import cPickle as pickle
 except:
     import pickle
-
-# if sys.version[0] != "3":
-    # raise Exception("Python2 is not supported at the moment, upgrade your GDB or use http://github.com/longld/peda")
 
 bytes = encode
 
@@ -659,6 +656,12 @@ class PEDA(object):
         except:
             return False
 
+    def get_session_filename(self):
+        filename = peda.getfile()
+        if not filename:
+            filename = 'unknown-file'
+        return config.Option.get("session").replace("#FILENAME#", os.path.basename(filename))
+
     def save_session(self, filename=None):
         """
         Save current working gdb session to file as a script
@@ -671,7 +674,7 @@ class PEDA(object):
         """
         session = ""
         if not filename:
-            filename = config.Option.get("session").replace("#FILENAME#", os.path.basename(peda.getfile()))
+            filename = self.get_session_filename()
 
         # exec-wrapper
         out = self.execute_redirect("show exec-wrapper")
@@ -700,7 +703,7 @@ class PEDA(object):
             - True if success to restore (Bool)
         """
         if not filename:
-            filename = config.Option.get("session").replace("#FILENAME#", os.path.basename(peda.getfile()))
+            filename = self.get_session_filename()
 
         # temporarily save and clear breakpoints
         tmp = tmpfile()
@@ -1320,7 +1323,7 @@ class PEDA(object):
         Returns:
             - Bool
         """
-        if not filename:
+        if not filename and self.getfile():
             filename = config.Option.get("snapshot").replace("#FILENAME#", os.path.basename(self.getfile()))
 
         snapshot = self.take_snapshot()
@@ -1368,7 +1371,7 @@ class PEDA(object):
         Returns:
             - Bool
         """
-        if not filename:
+        if not filename and self.getfile():
             filename = config.Option.get("snapshot").replace("#FILENAME#", os.path.basename(self.getfile()))
 
         fd = open(filename, "rb")
@@ -1399,17 +1402,27 @@ class PEDA(object):
                 return None
             headers = self.elfheader()
             binmap = []
-            hlist = [x for x in list(headers.items()) if x[1][2] == 'code']
-            hlist = sorted(hlist, key=lambda x:x[1][0])
-            binmap += [(hlist[0][1][0], hlist[-1][1][1], "rx-p", name)]
 
-            hlist = [x for x in list(headers.items()) if x[1][2] == 'rodata']
-            hlist = sorted(hlist, key=lambda x:x[1][0])
-            binmap += [(hlist[0][1][0], hlist[-1][1][1], "r--p", name)]
+            try:
+                hlist = [x for x in list(headers.items()) if x[1][2] == 'code']
+                hlist = sorted(hlist, key=lambda x:x[1][0])
+                binmap += [(hlist[0][1][0], hlist[-1][1][1], "rx-p", name)]
+            except Exception:
+                pass
 
-            hlist = [x for x in list(headers.items()) if x[1][2] == 'data']
-            hlist = sorted(hlist, key=lambda x:x[1][0])
-            binmap += [(hlist[0][1][0], hlist[-1][1][1], "rw-p", name)]
+            try:
+                hlist = [x for x in list(headers.items()) if x[1][2] == 'rodata']
+                hlist = sorted(hlist, key=lambda x:x[1][0])
+                binmap += [(hlist[0][1][0], hlist[-1][1][1], "r--p", name)]
+            except Exception:
+                pass
+
+            try:
+                hlist = [x for x in list(headers.items()) if x[1][2] == 'data']
+                hlist = sorted(hlist, key=lambda x:x[1][0])
+                binmap += [(hlist[0][1][0], hlist[-1][1][1], "rw-p", name)]
+            except Exception:
+                pass
 
             return binmap
 
@@ -1474,14 +1487,16 @@ class PEDA(object):
 
 
         # retrieve all maps
-        os = self.getos()
-        rmt = self.is_target_remote()
-        if os == "FreeBSD": # FreeBSD
-            maps = _get_allmaps_freebsd(pid, tid, rmt)
-        elif os == "Linux" : # Linux
-            maps = _get_allmaps_linux(pid, tid, rmt)
-        else:
-            maps = []
+        os   = self.getos()
+        rmt  = self.is_target_remote()
+        maps = []
+        try:
+            if   os == "FreeBSD": maps = _get_allmaps_freebsd(pid, tid, rmt)
+            elif os == "Linux" :   maps = _get_allmaps_linux(pid, tid, rmt)
+        except Exception as e:
+            if config.Option.get("debug") == "on":
+                msg("Exception: %s" %e)
+                traceback.print_exc()
 
         # select maps matched specific name
         if name == "binary":
@@ -1519,6 +1534,8 @@ class PEDA(object):
             for (start, end, perm, mapname) in maps:
                 if start <= address and end > address:
                     return (start, end, perm, mapname)
+        if self.is_address(address):
+            return (0,0xffffffff,'rwx','unknown')
         return None
 
     @memoized
@@ -1538,6 +1555,26 @@ class PEDA(object):
             return True
         else:
             return False
+
+    @memoized
+    def is_stack(self, address, maps=None):
+        """
+        Check if an address is in the stack
+        """
+        vmrange = self.get_vmrange(address, maps)
+        if vmrange and vmrange[3] == '[stack]':
+            return True
+        return False
+
+    @memoized
+    def is_heap(self, address, maps=None):
+        """
+        Check if an address is in the stack
+        """
+        vmrange = self.get_vmrange(address, maps)
+        if vmrange and vmrange[3] == '[heap]':
+            return True
+        return False
 
     @memoized
     def is_writable(self, address, maps=None):
@@ -1569,9 +1606,11 @@ class PEDA(object):
         Returns:
             - True if value belongs to an address range (Bool)
         """
-
-        vmrange = self.get_vmrange(value, maps)
-        return vmrange is not None
+        try:
+           gdb.selected_inferior().read_memory(value, 1)
+           return True
+        except:
+           return False
 
     @memoized
     def get_disasm(self, address, count=1):
@@ -1831,7 +1870,6 @@ class PEDA(object):
             - list of found result: (address(Int), hex encoded value(String))
 
         """
-
         result = []
         if end < start:
             (start, end) = (end, start)
@@ -1852,8 +1890,8 @@ class PEDA(object):
 
         if escape != 0:
             search = re.escape(search)
-
-        search = bytes(search)
+        elif isinstance(search, str):
+            search = bytes(search)
 
         try:
             p = re.compile(search)
@@ -2025,14 +2063,22 @@ class PEDA(object):
         else:
             (_, _, _, mapname) = self.get_vmrange(value)
 
-        # check for writable first so rwxp mem will be treated as data
-        if self.is_writable(value): # writable data address
+
+        if self.is_stack(value):
+            out = examine_data(value, bits)
+            if out:
+                result = (to_hex(value), "stack", out.split(":", 1)[1].strip())
+        elif self.is_heap(value):
+            out = examine_data(value, bits)
+            if out:
+                result = (to_hex(value), "heap", out.split(":", 1)[1].strip())
+        elif self.is_writable(value): # writable data address
             out = examine_data(value, bits)
             if out:
                 result = (to_hex(value), "data", out.split(":", 1)[1].strip())
 
         elif self.is_executable(value): # code/rodata address
-            if self.is_address(value, binmap):
+            if self.is_address(value, binmap) and None is gdb.solib_name(value):
                 headers = self.elfheader()
             else:
                 headers = self.elfheader_solib(mapname)
@@ -2051,7 +2097,7 @@ class PEDA(object):
                             result = (to_hex(value), "rodata", out.split(":", 1)[1].strip())
                         break
 
-                if result[0] is None: # not fall to any header section
+                else:
                     out = examine_data(value, bits)
                     result = (to_hex(value), "rodata", out.split(":", 1)[1].strip())
 
@@ -2236,7 +2282,7 @@ class PEDA(object):
             return {}
         (start, end, _) = headers[".dynstr"]
         mem = self.dumpmem(start, end)
-        if not mem:
+        if not mem and self.getfile():
             fd = open(self.getfile())
             fd.seek(start, 0)
             mem = fd.read(end-start)
@@ -2970,6 +3016,26 @@ class PEDACmd(object):
         else:
             return pid
 
+    def _eX(self, where, bytes, size):
+        addr  = to_int(where)
+        bytes = list(bytes)
+        for i, hex in enumerate(bytes):
+            bytes[i] = decode(hex, 'hex').ljust(size,b'\x00')
+        bytes = b''.join(bytes)
+        gdb.selected_inferior().write_memory(addr, bytes)
+
+    def eb(self, where, *bytes):
+        """Edits bytes"""
+        self._eX(where, bytes, 1)
+
+    def ew(self, where, *bytes):
+        """Edits shorts"""
+        self._eX(where, bytes, 2)
+
+    def ed(self, where, *bytes):
+        "docs"
+        self._eX(where, bytes, 4)
+
     def reload(self, *arg):
         """
         Reload PEDA sources, keep current options untouch
@@ -3012,8 +3078,11 @@ class PEDACmd(object):
             i = 0
             for cmd in self.commands:
                 if cmd.startswith("_"): continue # skip internal use commands
-                func = getattr(self, cmd)
-                helptext += "%s -- %s\n" % (cmd, green(trim(func.__doc__.strip("\n").splitlines()[0])))
+                func = getattr(self.__class__, cmd)
+                docstring = func.__doc__
+                if not docstring:
+                    func.__doc__ = docstring = 'No help for %s' % cmd
+                helptext += "%s -- %s\n" % (cmd, green(trim(docstring.strip("\n").splitlines()[0])))
             helptext += "\nType \"help\" followed by subcommand for full documentation."
         else:
             cmd = arg[0]
@@ -3266,6 +3335,9 @@ class PEDACmd(object):
             MYNAME address count
             MYNAME address /count (dump "count" lines, 16-bytes each)
         """
+        arg = list(arg)
+        if len(arg) == 1: arg.append('64')
+
         (address, count) = normalize_argv(arg, 2)
         linelen = 16 # display 16-bytes per line
 
@@ -3382,7 +3454,7 @@ class PEDACmd(object):
             self._missing_argument()
 
         if not filename:
-            filename = config.Option.get("session").replace("#FILENAME#", os.path.basename(peda.getfile()))
+            filename = peda.get_session_filename()
 
         if option == "save":
             if peda.save_session(filename):
@@ -3861,7 +3933,7 @@ class PEDACmd(object):
         if not started: # try ELF entry point or just "run" as the last resort
             elf_entry = peda.elfentry()
             if elf_entry:
-                out = peda.execute_redirect("tbreak %s" % elf_entry)
+                out = peda.execute_redirect("tbreak *%s" % elf_entry)
 
             peda.execute("run")
 
@@ -4316,7 +4388,11 @@ class PEDACmd(object):
         if "stack" in opt or "SIGSEGV" in status:
             self.context_stack(count)
         msg(separator(), "blue")
-        msg("Legend: %s, %s, %s, value" % (red("code"), blue("data"), green("rodata")))
+
+        colors = []
+        for datatype in ('stack', 'code','data', 'heap', 'rodata','value'):
+            colors.append(format_address(datatype, datatype))
+        msg("Legend: %s" % ', '.join(colors))
 
         # display stopped reason
         if "SIG" in status:
@@ -4667,15 +4743,33 @@ class PEDACmd(object):
         text = ""
 
 
+        #
+        # Display relevant information in the left gutter about
+        # registers or important globals which point at the
+        # address.
+        #
         regs = peda.getregs()
+        syms = {'argv': '__libc_argv',
+                'envp': '__environ',
+                'progname': '__progname'}
+
+        for k,v in syms.items():
+            s = gdb.lookup_global_symbol(v)
+            if s is not None:
+                regs[k] = to_int(s.value())
+
+
         regsList = {}
         regsColumnLen = 1
         #find any registers pointing to an address
         for chain in result:
              regslist = ""
+             addr     = to_int(chain[0][0])
+             size     = gdb.lookup_type('void').pointer().sizeof
              for reg in regs:
-                if regs[reg] == to_int(chain[0][0]):
-                   regslist += reg + " "
+                regval = regs[reg]
+                if regval in range(addr, addr+size):
+                    regslist += '%s%s ' % (reg, addr-regval or '')
              s = len(regslist)
              if s > regsColumnLen:
                 regsColumnLen = s
@@ -6024,5 +6118,7 @@ peda.execute("set follow-fork-mode child")
 peda.execute("set backtrace past-main on")
 peda.execute("set step-mode on")
 peda.execute("set print pretty on")
+peda.execute("set width 0")
+peda.execute("set print elements 15")
 peda.execute("handle SIGALRM print nopass") # ignore SIGALRM
 peda.execute("handle SIGSEGV stop print nopass") # catch SIGSEGV

@@ -3,7 +3,24 @@ peda
 
 PEDA - Python Exploit Development Assistance for GDB
 
+## Screenshot
+![start](http://i.imgur.com/f22ZRro.png)
+
+## Enhancements:
+
+ This version has been extended by Zach Riggle to add some features and give dual-compatibility with Python2 and Python3.
+
+* Python2 and Python3 compatibility
+* Line width wrapping on banners
+* Colorize stack and heap differently than regular data
+* Show registers alongside stack output (and 'telescope' command)
+* Basic support for ARM and PPC registers
+* Support for passing GDB variables to PEDA routines (e.g. `hexdump $pc`)
+
 ## Key Features:
+
+These are the standard features of PEDA:
+
 * Enhance the display of gdb: colorize and display disassembly codes, registers, memory information during debugging.
 * Add commands to support debugging and exploit development (for a full list of commands use `peda help`):
   * `aslr` -- Show/set ASLR setting of GDB
@@ -29,13 +46,6 @@ PEDA - Python Exploit Development Assistance for GDB
 
 ## Installation
 
-    git clone https://github.com/longld/peda.git ~/peda
+    git clone https://github.com/zachriggle/peda.git ~/peda
     echo "source ~/peda/peda.py" >> ~/.gdbinit
     echo "DONE! debug your program with gdb and enjoy"
-
-## Screenshot
-![start](http://i.imgur.com/P1BF5mp.png)
-
-![pattern arg](http://i.imgur.com/W97OWRC.png)
-
-![patts](http://i.imgur.com/Br24IpC.png)
